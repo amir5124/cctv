@@ -1,10 +1,10 @@
 const mysql = require('mysql2');
 
 const pool = mysql.createPool({
-    host: '31.97.48.240',
-    user: 'mysql',
-    password: 'e2O1NDe4THqfYTA7j8ngeViAkn0aQwN7ahYURnTFWKghVyW6KbRgcxshB2sUy2cd',
-    database: 'cctv',
+    host: process.env.DB_HOST || '31.97.48.240',
+    user: process.env.DB_USER || 'mysql',
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE || 'cctv',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
