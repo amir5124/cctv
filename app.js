@@ -4,6 +4,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const cors = require('cors');
 const moment = require('moment-timezone');
+const mysql = require('mysql2');
 
 const app = express();
 app.use(express.json());
@@ -15,17 +16,37 @@ const username = "LI9019VKS";
 const pin = "5m6uYAScSxQtCmU";
 const serverKey = "QtwGEr997XDcmMb1Pq8S5X1N";
 
+const pool = mysql.createPool({
+    host: process.env.DB_HOST || '31.97.48.240',
+    user: process.env.DB_USER || 'mysql',
+    password: process.env.DB_PASSWORD || 'e2O1NDe4THqfYTA7j8ngeViAkn0aQwN7ahYURnTFWKghVyW6KbRgcxshB2sUy2cd',
+    database: process.env.DB_DATABASE || 'cctv',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+}).promise();
+
+pool.getConnection()
+    .then(connection => {
+        console.log('✅ Database terhubung: Berhasil masuk ke MySQL.');
+        connection.release(); // Kembalikan koneksi ke pool
+    })
+    .catch(err => {
+        console.error('❌ Database gagal terhubung:');
+        console.error('Pesan Error:', err.message);
+
+        // Memberikan saran perbaikan berdasarkan error umum
+        if (err.code === 'ER_BAD_DB_ERROR') console.error('Tip: Cek apakah nama database sudah benar.');
+        if (err.code === 'ECONNREFUSED') console.error('Tip: Cek apakah server MySQL (XAMPP/Docker) sudah nyala.');
+    });
+
+module.exports = pool;
+
 
 // 🔄 Fungsi expired format YYYYMMDDHHmmss
 function getExpiredTimestamp(minutesFromNow = 15) {
     return moment.tz('Asia/Jakarta').add(minutesFromNow, 'minutes').format('YYYYMMDDHHmmss');
 }
-
-const getFormatNow = () => {
-    const now = new Date();
-    const pad = (n) => n.toString().padStart(2, '0');
-    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-};
 
 // 🔐 Fungsi membuat signature untuk request POST VA
 function generateSignaturePOST({
