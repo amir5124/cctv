@@ -16,7 +16,7 @@ const pin = "5m6uYAScSxQtCmU";
 const serverKey = "QtwGEr997XDcmMb1Pq8S5X1N";
 
 const pool = mysql.createPool({
-    host: process.env.DB_HOST || '31.97.48.240',
+    host: process.env.DB_HOST || 'uksc8scgkkcw0wk0ooc8008s',
     user: process.env.DB_USER || 'mysql',
     password: process.env.DB_PASSWORD || 'e2O1NDe4THqfYTA7j8ngeViAkn0aQwN7ahYURnTFWKghVyW6KbRgcxshB2sUy2cd',
     database: process.env.DB_DATABASE || 'cctv',
