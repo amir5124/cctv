@@ -100,6 +100,25 @@ function generatePartnerReff() {
     return `${prefix}-${timestamp}-${randomStr}`;
 }
 
+// Endpoint untuk mengambil semua data produk
+app.get('/products', async (req, res) => {
+    try {
+        // Query untuk mengambil semua kolom dari tabel produk
+        // Urutkan berdasarkan yang terbaru (created_at DESC)
+        const [rows] = await db.query('SELECT * FROM produk ORDER BY created_at DESC');
+
+        // Kirim data ke frontend
+        console.log(`✅ Berhasil mengambil ${rows.length} produk`);
+        res.json(rows);
+    } catch (err) {
+        console.error("❌ Gagal mengambil data produk:", err.message);
+        res.status(500).json({
+            error: "Gagal mengambil data produk",
+            detail: err.message
+        });
+    }
+});
+
 app.post('/checkout', async (req, res) => {
     const { nama, no_hp, email, alamat, sharelock, items, total_bayar } = req.body;
 
