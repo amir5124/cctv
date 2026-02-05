@@ -1,5 +1,4 @@
 const express = require('express');
-const db = require('./database');
 const axios = require('axios');
 const crypto = require('crypto');
 const cors = require('cors');
