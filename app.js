@@ -15,6 +15,7 @@ const username = "LI9019VKS";
 const pin = "5m6uYAScSxQtCmU";
 const serverKey = "QtwGEr997XDcmMb1Pq8S5X1N";
 
+// --- PERBAIKAN DI SINI ---
 const pool = mysql.createPool({
     host: process.env.DB_HOST || 'uksc8scgkkcw0wk0ooc8008s',
     user: process.env.DB_USER || 'mysql',
@@ -25,156 +26,68 @@ const pool = mysql.createPool({
     queueLimit: 0
 }).promise();
 
+// Test Koneksi
 pool.getConnection()
     .then(connection => {
         console.log('✅ Database terhubung: Berhasil masuk ke MySQL.');
-        connection.release(); // Kembalikan koneksi ke pool
+        connection.release();
     })
     .catch(err => {
-        console.error('❌ Database gagal terhubung:');
-        console.error('Pesan Error:', err.message);
-
-        // Memberikan saran perbaikan berdasarkan error umum
-        if (err.code === 'ER_BAD_DB_ERROR') console.error('Tip: Cek apakah nama database sudah benar.');
-        if (err.code === 'ECONNREFUSED') console.error('Tip: Cek apakah server MySQL (XAMPP/Docker) sudah nyala.');
+        console.error('❌ Database gagal terhubung:', err.message);
     });
 
-module.exports = pool;
-
-
-// 🔄 Fungsi expired format YYYYMMDDHHmmss
+// --- HELPERS ---
 function getExpiredTimestamp(minutesFromNow = 15) {
     return moment.tz('Asia/Jakarta').add(minutesFromNow, 'minutes').format('YYYYMMDDHHmmss');
 }
 
-// 🔐 Fungsi membuat signature untuk request POST VA
-function generateSignaturePOST({
-    amount,
-    expired,
-    bank_code,
-    partner_reff,
-    customer_id,
-    customer_name,
-    customer_email,
-    clientId,
-    serverKey
-}) {
+function generateSignaturePOST({ amount, expired, bank_code, partner_reff, customer_id, customer_name, customer_email, clientId, serverKey }) {
     const path = '/transaction/create/va';
     const method = 'POST';
-
-    const rawValue = amount + expired + bank_code + partner_reff +
-        customer_id + customer_name + customer_email + clientId;
+    const rawValue = amount + expired + bank_code + partner_reff + customer_id + customer_name + customer_email + clientId;
     const cleaned = rawValue.replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
-
-    const signToString = path + method + cleaned;
-
-    return crypto.createHmac("sha256", serverKey).update(signToString).digest("hex");
+    return crypto.createHmac("sha256", serverKey).update(path + method + cleaned).digest("hex");
 }
 
-function generateSignatureQRIS({
-    amount,
-    expired,
-    partner_reff,
-    customer_id,
-    customer_name,
-    customer_email,
-    clientId,
-    serverKey
-}) {
+function generateSignatureQRIS({ amount, expired, partner_reff, customer_id, customer_name, customer_email, clientId, serverKey }) {
     const path = '/transaction/create/qris';
     const method = 'POST';
-
-    const rawValue = amount + expired + partner_reff +
-        customer_id + customer_name + customer_email + clientId;
+    const rawValue = amount + expired + partner_reff + customer_id + customer_name + customer_email + clientId;
     const cleaned = rawValue.replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
-
-    const signToString = path + method + cleaned;
-
-    return crypto.createHmac("sha256", serverKey).update(signToString).digest("hex");
+    return crypto.createHmac("sha256", serverKey).update(path + method + cleaned).digest("hex");
 }
 
 function generatePartnerReff() {
-    const prefix = 'INV-782372373627';
-    const timestamp = Date.now();
-    const randomStr = crypto.randomBytes(4).toString('hex');
-    return `${prefix}-${timestamp}-${randomStr}`;
+    return `INV-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 }
 
-// Endpoint untuk mengambil semua data produk
+// --- ENDPOINT PRODUK ---
 app.get('/products', async (req, res) => {
     try {
-        // Query untuk mengambil semua kolom dari tabel produk
-        // Urutkan berdasarkan yang terbaru (created_at DESC)
-        const [rows] = await db.query('SELECT * FROM produk ORDER BY created_at DESC');
-
-        // Kirim data ke frontend
+        // PERBAIKAN: Menggunakan pool, bukan db
+        const [rows] = await pool.query('SELECT * FROM produk ORDER BY created_at DESC');
         console.log(`✅ Berhasil mengambil ${rows.length} produk`);
         res.json(rows);
     } catch (err) {
         console.error("❌ Gagal mengambil data produk:", err.message);
-        res.status(500).json({
-            error: "Gagal mengambil data produk",
-            detail: err.message
-        });
+        res.status(500).json({ error: "Internal Server Error", detail: err.message });
     }
 });
 
-app.post('/checkout', async (req, res) => {
-    const { nama, no_hp, email, alamat, sharelock, items, total_bayar } = req.body;
-
-    // Mulai Koneksi Khusus untuk Transaksi
-    const connection = await db.getConnection();
-
-    try {
-        await connection.beginTransaction();
-
-        // 1. Simpan ke tabel orders
-        const [orderResult] = await connection.query(
-            `INSERT INTO orders (nama_pemesan, no_hp, email, alamat_catatan, sharelock_url, total_bayar) 
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [nama, no_hp, email, alamat, sharelock, total_bayar]
-        );
-
-        const orderId = orderResult.insertId;
-
-        // 2. Simpan banyak item ke order_items (Looping)
-        // Format items: [{ produk_id: 1, qty: 2, harga: 459.000 }, ...]
-        const itemQueries = items.map(item => {
-            return connection.query(
-                `INSERT INTO order_items (order_id, produk_id, jumlah, harga_satuan) 
-                 VALUES (?, ?, ?, ?)`,
-                [orderId, item.produk_id, item.qty, item.harga]
-            );
-        });
-
-        await Promise.all(itemQueries);
-
-        // Jika semua berhasil, simpan permanen
-        await connection.commit();
-        res.status(200).json({ message: "Pesanan berhasil dibuat!", orderId });
-
-    } catch (error) {
-        // Jika ada satu saja yang gagal, batalkan semuanya
-        await connection.rollback();
-        res.status(500).json({ message: "Gagal memproses pesanan", error: error.message });
-    } finally {
-        connection.release();
-    }
-});
-
+// --- ENDPOINT CHECKOUT & PAY ---
 app.post('/checkout-and-pay', async (req, res) => {
-    const connection = await db.getConnection();
+    let connection;
     try {
+        // PERBAIKAN: Menggunakan pool
+        connection = await pool.getConnection();
         await connection.beginTransaction();
 
         const { nama, no_hp, email, alamat, sharelock, items, total_bayar, method, bank_code } = req.body;
-
-        // 1. Generate Info Pembayaran
         const partner_reff = generatePartnerReff();
         const expired = getExpiredTimestamp();
-        const customer_id = no_hp; // Gunakan No HP sebagai ID unik customer
+        const customer_id = no_hp;
 
-        // 2. Simpan Header Pesanan ke tabel 'orders'
+        // 1. Simpan Header Pesanan
         const [orderResult] = await connection.query(
             `INSERT INTO orders (nama_pemesan, no_hp, email, alamat_catatan, sharelock_url, total_bayar, partner_reff, payment_method, status_order) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
@@ -182,92 +95,70 @@ app.post('/checkout-and-pay', async (req, res) => {
         );
         const orderId = orderResult.insertId;
 
-        // 3. Simpan Detail Barang ke tabel 'order_items'
-        const itemQueries = items.map(item => {
-            return connection.query(
+        // 2. Simpan Detail Barang
+        for (const item of items) {
+            await connection.query(
                 `INSERT INTO order_items (order_id, produk_id, jumlah, harga_satuan) VALUES (?, ?, ?, ?)`,
                 [orderId, item.produk_id, item.qty, item.harga]
             );
-        });
-        await Promise.all(itemQueries);
+        }
 
-        // 4. Integrasi API LinkQu
+        // 3. LinkQu API Request
         let linkQuResponse;
-        const url_callback = "https://cctv.siappgo.id/callback"; // Ganti dengan domain kamu
+        const url_callback = "https://cctv.siappgo.id/callback";
 
         if (method === 'VA') {
+            const b_code = bank_code || 'BNI';
             const signature = generateSignaturePOST({
-                amount: total_bayar, expired, bank_code, partner_reff,
+                amount: total_bayar, expired, bank_code: b_code, partner_reff,
                 customer_id, customer_name: nama, customer_email: email, clientId, serverKey
             });
 
-            const payload = {
-                amount: total_bayar, bank_code, partner_reff, customer_id,
+            const response = await axios.post('https://api.linkqu.id/linkqu-partner/transaction/create/va', {
+                amount: total_bayar, bank_code: b_code, partner_reff, customer_id,
                 customer_name: nama, customer_email: email, username, pin, expired, signature, url_callback
-            };
+            }, { headers: { 'client-id': clientId, 'client-secret': clientSecret } });
 
-            const response = await axios.post('https://api.linkqu.id/linkqu-partner/transaction/create/va', payload, {
-                headers: { 'client-id': clientId, 'client-secret': clientSecret }
-            });
             linkQuResponse = response.data;
-
-            // Update nomor VA ke database
             await connection.query(`UPDATE orders SET va_number = ? WHERE id = ?`, [linkQuResponse.virtual_account, orderId]);
 
-        } else if (method === 'QRIS') {
+        } else {
             const signature = generateSignatureQRIS({
                 amount: total_bayar, expired, partner_reff,
                 customer_id, customer_name: nama, customer_email: email, clientId, serverKey
             });
 
-            const payload = {
+            const response = await axios.post('https://api.linkqu.id/linkqu-partner/transaction/create/qris', {
                 amount: total_bayar, partner_reff, customer_id,
                 customer_name: nama, customer_email: email, username, pin, expired, signature, url_callback
-            };
+            }, { headers: { 'client-id': clientId, 'client-secret': clientSecret } });
 
-            const response = await axios.post('https://api.linkqu.id/linkqu-partner/transaction/create/qris', payload, {
-                headers: { 'client-id': clientId, 'client-secret': clientSecret }
-            });
             linkQuResponse = response.data;
-
-            // Update URL QRIS ke database
             await connection.query(`UPDATE orders SET qris_url = ? WHERE id = ?`, [linkQuResponse.imageqris, orderId]);
         }
 
         await connection.commit();
-
-        // Kirim hasil akhir ke Frontend
-        res.json({
-            status: "Success",
-            orderId: orderId,
-            payment_info: linkQuResponse
-        });
+        res.json({ status: "Success", orderId, payment_info: linkQuResponse });
 
     } catch (err) {
-        await connection.rollback();
+        if (connection) await connection.rollback();
         console.error("❌ Checkout Gagal:", err.message);
-        res.status(500).json({ error: "Gagal memproses pesanan dan pembayaran", detail: err.message });
+        res.status(500).json({ error: "Gagal memproses pesanan", detail: err.message });
     } finally {
-        connection.release();
+        if (connection) connection.release();
     }
 });
 
-// ✅ CALLBACK UNTUK UPDATE STATUS JADI 'SUKSES'
+// CALLBACK
 app.post('/callback', async (req, res) => {
     try {
-        const { partner_reff, status } = req.body; // Sesuaikan dengan payload asli LinkQu
-
-        if (status === 'SUCCESS' || req.body.va_code) { // Logika deteksi sukses
-            await db.query(
-                `UPDATE orders SET status_order = 'Diproses' WHERE partner_reff = ?`,
-                [partner_reff]
-            );
-            console.log(`✅ Pesanan ${partner_reff} lunas!`);
-        }
-        res.json({ message: "Callback Received" });
+        const { partner_reff, status } = req.body;
+        // PERBAIKAN: Menggunakan pool
+        await pool.query(`UPDATE orders SET status_order = 'Diproses' WHERE partner_reff = ?`, [partner_reff]);
+        res.json({ message: "OK" });
     } catch (err) {
         res.status(500).send(err.message);
     }
 });
 
-app.listen(3000, () => console.log('Server lari di port 3000'));
+app.listen(3000, () => console.log('🚀 Server lari di port 3000'));
