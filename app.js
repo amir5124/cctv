@@ -21,8 +21,9 @@ const serverKey = "QtwGEr997XDcmMb1Pq8S5X1N";
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require('twilio')(accountSid, authToken);
-const ADMIN_WA = "whatsapp:+6282323907426"; // Nomor Admin
-const TWILIO_WA = "whatsapp:+62882005447472"; // Nomor Sandbox Twilio Anda
+
+const ADMIN_WA = "whatsapp:+6282323907426";
+const TWILIO_WA = "whatsapp:+62882005447472";
 
 // Database Pool
 const pool = mysql.createPool({
@@ -37,16 +38,42 @@ const pool = mysql.createPool({
 // --- HELPERS ---
 const formatIDR = (val) => new Intl.NumberFormat('id-ID').format(val);
 
-async function sendWhatsApp(to, message) {
+/**
+ * WhatsApp Template Builder
+ * Mengirim pesan dengan format variabel {{1}}, {{2}}, dst.
+ */
+async function sendWhatsAppMessage(to, templateData, isForAdmin = false) {
     try {
+        let bodyText = "";
+        let targetNumber = to.includes('whatsapp:') ? to : `whatsapp:${to.replace(/^0/, '+62')}`;
+
+        if (isForAdmin) {
+            // Template Admin
+            bodyText = `pesanan baru masuk! 🔔\n\n` +
+                `pelanggan: ${templateData.nama} (${templateData.hp})\n` +
+                `item: \n${templateData.detail}\n` +
+                `total: Rp${formatIDR(templateData.total)}\n` +
+                `alamat: ${templateData.alamat}\n` +
+                `id ref: ${templateData.reff}`;
+        } else {
+            // Template Pembeli
+            bodyText = `halo ${templateData.nama}, pesanan anda telah diterima!\n\n` +
+                `detail order: \n${templateData.detail}\n` +
+                `total: Rp${formatIDR(templateData.total)}\n` +
+                `metode: ${templateData.metode}\n` +
+                `status: menunggu pembayaran\n\n` +
+                `silakan selesaikan pembayaran sebelum expired. terima kasih!`;
+        }
+
         await client.messages.create({
             from: TWILIO_WA,
-            to: `whatsapp:${to.replace(/^0/, '+62')}`, // Convert 08... ke +628...
-            body: message
+            to: targetNumber,
+            body: bodyText
         });
-        console.log(`✅ WA Terkirim ke ${to}`);
+
+        console.log(`✅ wa terkirim ke ${targetNumber}`);
     } catch (err) {
-        console.error(`❌ Gagal kirim WA ke ${to}:`, err.message);
+        console.error(`❌ gagal kirim wa:`, err.message);
     }
 }
 
@@ -111,7 +138,7 @@ app.post('/checkout-and-pay', async (req, res) => {
             itemDetailsText += `- ${item.nama_produk || 'Produk'} (x${item.qty}): Rp${formatIDR(item.harga * item.qty)}\n`;
         }
 
-        // 3. LinkQu API
+        // 3. LinkQu API Request
         let linkQuResponse;
         const url_callback = "https://cctv.siappgo.id/callback";
 
@@ -130,37 +157,33 @@ app.post('/checkout-and-pay', async (req, res) => {
             linkQuResponse = resp.data;
         }
 
-
         await connection.commit();
 
-        // 4. KIRIM WHATSAPP NOTIFIKASI
-        const msgBuyer = `Halo *${nama}*, pesanan Anda telah diterima!\n\n` +
-            `*Detail Order:* \n${itemDetailsText}\n` +
-            `*Total:* Rp${formatIDR(total_bayar)}\n` +
-            `*Metode:* ${method}\n` +
-            `*Status:* Menunggu Pembayaran\n\n` +
-            `Silakan selesaikan pembayaran sebelum expired. Terima kasih!`;
+        // 4. KIRIM NOTIFIKASI VIA TEMPLATE BUILDER
 
-        const msgAdmin = `🔔 *PESANAN BARU MASUK*\n\n` +
-            `*Pelanggan:* ${nama} (${no_hp})\n` +
-            `*Item:* \n${itemDetailsText}\n` +
-            `*Total:* Rp${formatIDR(total_bayar)}\n` +
-            `*Alamat:* ${alamat}\n` +
-            `*Maps:* ${sharelock || '-'}\n` +
-            `*ID Ref:* ${partner_reff}`;
+        // Data untuk Pembeli
+        await sendWhatsAppMessage(no_hp, {
+            nama: nama,
+            detail: itemDetailsText,
+            total: total_bayar,
+            metode: method
+        }, false);
 
-        // KIRIM KE PEMBELI
-        await sendWhatsApp(no_hp, msgBuyer);
-
-        // KIRIM KE ADMIN (Sekarang menggunakan variabel ADMIN_WA agar tidak disable)
-        await sendWhatsApp(ADMIN_WA, msgAdmin);
+        // Data untuk Admin (Menggunakan variabel ADMIN_WA)
+        await sendWhatsAppMessage(ADMIN_WA, {
+            nama: nama,
+            hp: no_hp,
+            detail: itemDetailsText,
+            total: total_bayar,
+            alamat: alamat,
+            reff: partner_reff
+        }, true);
 
         res.json({ status: "Success", orderId, payment_info: linkQuResponse });
 
-
-
     } catch (err) {
         if (connection) await connection.rollback();
+        console.error("checkout gagal:", err.message);
         res.status(500).json({ error: err.message });
     } finally {
         if (connection) connection.release();
@@ -172,7 +195,6 @@ app.post('/callback', async (req, res) => {
         const { partner_reff, status } = req.body;
         if (status === "SUCCESS") {
             await pool.query(`UPDATE orders SET status_order = 'Diproses' WHERE partner_reff = ?`, [partner_reff]);
-            // Opsional: Kirim WA "Pembayaran Berhasil" di sini
         }
         res.json({ message: "OK" });
     } catch (err) {
@@ -180,4 +202,4 @@ app.post('/callback', async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('🚀 Server running on port 3000'));
+app.listen(3000, () => console.log('🚀 server lari di port 3000'));
