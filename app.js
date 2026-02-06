@@ -10,14 +10,14 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// --- KONFIGURASI ---
+// --- KONFIGURASI API LINKQU ---
 const clientId = "5f5aa496-7e16-4ca1-9967-33c768dac6c7";
 const clientSecret = "TM1rVhfaFm5YJxKruHo0nWMWC";
 const username = "LI9019VKS";
 const pin = "5m6uYAScSxQtCmU";
 const serverKey = "QtwGEr997XDcmMb1Pq8S5X1N";
 
-// Twilio Config
+// --- KONFIGURASI TWILIO ---
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require('twilio')(accountSid, authToken);
@@ -25,7 +25,13 @@ const client = require('twilio')(accountSid, authToken);
 const ADMIN_WA = "whatsapp:+6282323907426";
 const TWILIO_WA = "whatsapp:+62882005447472";
 
-// Database Pool
+/** * KONFIGURASI CONTENT SID 
+ * Masukkan kode HX... dari Twilio Dashboard setelah di-approve
+ */
+const SID_SUKSES_PEMBELI = 'HX089365c0c4aed489db21e53b5b9a8660';
+const SID_SUKSES_ADMIN = 'HXb0baf5fe7928c3055396de2dab232084';
+
+// --- DATABASE POOL ---
 const pool = mysql.createPool({
     host: process.env.DB_HOST || 'uksc8scgkkcw0wk0ooc8008s',
     user: process.env.DB_USER || 'mysql',
@@ -39,41 +45,20 @@ const pool = mysql.createPool({
 const formatIDR = (val) => new Intl.NumberFormat('id-ID').format(val);
 
 /**
- * WhatsApp Template Builder
- * Mengirim pesan dengan format variabel {{1}}, {{2}}, dst.
+ * Fungsi Pengirim WhatsApp menggunakan Template (Content SID)
  */
-async function sendWhatsAppMessage(to, templateData, isForAdmin = false) {
+async function sendWhatsAppTemplate(to, contentSid, contentVariables) {
     try {
-        let bodyText = "";
         let targetNumber = to.includes('whatsapp:') ? to : `whatsapp:${to.replace(/^0/, '+62')}`;
-
-        if (isForAdmin) {
-            // Template Admin
-            bodyText = `pesanan baru masuk! 🔔\n\n` +
-                `pelanggan: ${templateData.nama} (${templateData.hp})\n` +
-                `item: \n${templateData.detail}\n` +
-                `total: Rp${formatIDR(templateData.total)}\n` +
-                `alamat: ${templateData.alamat}\n` +
-                `id ref: ${templateData.reff}`;
-        } else {
-            // Template Pembeli
-            bodyText = `halo ${templateData.nama}, pesanan anda telah diterima!\n\n` +
-                `detail order: \n${templateData.detail}\n` +
-                `total: Rp${formatIDR(templateData.total)}\n` +
-                `metode: ${templateData.metode}\n` +
-                `status: menunggu pembayaran\n\n` +
-                `silakan selesaikan pembayaran sebelum expired. terima kasih!`;
-        }
-
         await client.messages.create({
             from: TWILIO_WA,
             to: targetNumber,
-            body: bodyText
+            contentSid: contentSid,
+            contentVariables: JSON.stringify(contentVariables)
         });
-
-        console.log(`✅ wa terkirim ke ${targetNumber}`);
+        console.log(`✅ Template terkirim ke ${targetNumber}`);
     } catch (err) {
-        console.error(`❌ gagal kirim wa:`, err.message);
+        console.error(`❌ Gagal kirim template ke ${to}:`, err.message);
     }
 }
 
@@ -120,7 +105,6 @@ app.post('/checkout-and-pay', async (req, res) => {
         const expired = getExpiredTimestamp();
         const customer_id = no_hp;
 
-        // 1. Simpan Orders
         const [orderResult] = await connection.query(
             `INSERT INTO orders (nama_pemesan, no_hp, email, alamat_catatan, sharelock_url, total_bayar, partner_reff, payment_method, status_order) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
@@ -128,17 +112,13 @@ app.post('/checkout-and-pay', async (req, res) => {
         );
         const orderId = orderResult.insertId;
 
-        // 2. Simpan Items & Rakit Pesan WA
-        let itemDetailsText = "";
         for (const item of items) {
             await connection.query(
                 `INSERT INTO order_items (order_id, produk_id, jumlah, harga_satuan) VALUES (?, ?, ?, ?)`,
                 [orderId, item.produk_id, item.qty, item.harga]
             );
-            itemDetailsText += `- ${item.nama_produk || 'Produk'} (x${item.qty}): Rp${formatIDR(item.harga * item.qty)}\n`;
         }
 
-        // 3. LinkQu API Request
         let linkQuResponse;
         const url_callback = "https://cctv.siappgo.id/callback";
 
@@ -159,45 +139,62 @@ app.post('/checkout-and-pay', async (req, res) => {
 
         await connection.commit();
 
-        // 4. KIRIM NOTIFIKASI VIA TEMPLATE BUILDER
-
-        // Data untuk Pembeli
-        await sendWhatsAppMessage(no_hp, {
-            nama: nama,
-            detail: itemDetailsText,
-            total: total_bayar,
-            metode: method
-        }, false);
-
-        // Data untuk Admin (Menggunakan variabel ADMIN_WA)
-        await sendWhatsAppMessage(ADMIN_WA, {
-            nama: nama,
-            hp: no_hp,
-            detail: itemDetailsText,
-            total: total_bayar,
-            alamat: alamat,
-            reff: partner_reff
-        }, true);
-
-        res.json({ status: "Success", orderId, payment_info: linkQuResponse });
+        // Response checkout sukses (tanpa kirim WA dulu)
+        res.json({ status: "Success", orderId, partner_reff, payment_info: linkQuResponse });
 
     } catch (err) {
         if (connection) await connection.rollback();
-        console.error("checkout gagal:", err.message);
         res.status(500).json({ error: err.message });
     } finally {
         if (connection) connection.release();
     }
 });
 
+// --- CALLBACK ENDPOINT (KIRIM NOTIFIKASI SAAT STATUS SUCCESS) ---
 app.post('/callback', async (req, res) => {
     try {
         const { partner_reff, status } = req.body;
+
         if (status === "SUCCESS") {
+            // 1. Update status order di database
             await pool.query(`UPDATE orders SET status_order = 'Diproses' WHERE partner_reff = ?`, [partner_reff]);
+
+            // 2. Ambil data order & list detail produk dari database
+            const [orderRows] = await pool.query(
+                `SELECT o.*, 
+                (SELECT GROUP_CONCAT(CONCAT('- ', p.nama_produk, ' (x', oi.jumlah, ')') SEPARATOR '\n') 
+                 FROM order_items oi 
+                 JOIN produk p ON oi.produk_id = p.id 
+                 WHERE oi.order_id = o.id) as detail_produk
+                 FROM orders o WHERE o.partner_reff = ?`, [partner_reff]
+            );
+
+            if (orderRows.length > 0) {
+                const order = orderRows[0];
+                const listProduk = order.detail_produk || '-';
+
+                // 1. Kirim Template Sukses ke Pembeli (Sekarang ada Detail Pesanan)
+                await sendWhatsAppTemplate(order.no_hp, SID_SUKSES_PEMBELI, {
+                    "1": order.nama_pemesan,
+                    "2": partner_reff,
+                    "3": listProduk // Variabel baru untuk pembeli
+                });
+
+                // 2. Kirim Template Sukses ke Admin
+                await sendWhatsAppTemplate(ADMIN_WA, SID_SUKSES_ADMIN, {
+                    "1": order.nama_pemesan,
+                    "2": order.no_hp,
+                    "3": formatIDR(order.total_bayar),
+                    "4": partner_reff,
+                    "5": listProduk,
+                    "6": order.alamat_catatan,
+                    "7": order.sharelock_url || 'tidak disertakan'
+                });
+            }
         }
         res.json({ message: "OK" });
     } catch (err) {
+        console.error("callback error:", err.message);
         res.status(500).send(err.message);
     }
 });
