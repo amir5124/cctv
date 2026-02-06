@@ -22,7 +22,7 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require('twilio')(accountSid, authToken);
 
-const ADMIN_WA = "whatsapp:+6282323907426";
+const ADMIN_WA = "whatsapp:+6282226666610";
 const TWILIO_WA = "whatsapp:+62882005447472";
 
 /** * KONFIGURASI CONTENT SID 
