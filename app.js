@@ -156,10 +156,31 @@ app.post('/callback', async (req, res) => {
         const { partner_reff, status } = req.body;
 
         if (status === "SUCCESS") {
-            // 1. Update status order di database
-            await pool.query(`UPDATE orders SET status_order = 'Diproses' WHERE partner_reff = ?`, [partner_reff]);
+            // 1. Cek dulu status pesanan saat ini di database
+            const [checkRows] = await pool.query(
+                `SELECT status_order FROM orders WHERE partner_reff = ?`,
+                [partner_reff]
+            );
 
-            // 2. Ambil data order & list detail produk dari database
+            if (checkRows.length === 0) {
+                return res.status(404).json({ message: "Order tidak ditemukan" });
+            }
+
+            // 2. Jika status sudah bukan 'Pending', berarti sudah pernah diproses
+            // Langsung jawab OK agar LinkQu tidak mengirim ulang lagi
+            if (checkRows[0].status_order !== 'Pending') {
+                console.log(`ℹ️ Callback diabaikan: Order ${partner_reff} sudah berstatus ${checkRows[0].status_order}`);
+                return res.json({ message: "OK (Already processed)" });
+            }
+
+            // 3. Update status pesanan menjadi 'Diproses'
+            // Lakukan ini SEBELUM kirim WA agar jika ada request bersamaan, yang kedua tertahan
+            await pool.query(
+                `UPDATE orders SET status_order = 'Diproses' WHERE partner_reff = ?`,
+                [partner_reff]
+            );
+
+            // 4. Ambil data untuk notifikasi
             const [orderRows] = await pool.query(
                 `SELECT o.*, 
                 (SELECT GROUP_CONCAT(CONCAT('- ', p.nama_produk, ' (x', oi.jumlah, ')') SEPARATOR '\n') 
@@ -173,29 +194,34 @@ app.post('/callback', async (req, res) => {
                 const order = orderRows[0];
                 const listProduk = order.detail_produk || '-';
 
-                // 1. Kirim Template Sukses ke Pembeli (Sekarang ada Detail Pesanan)
-                await sendWhatsAppTemplate(order.no_hp, SID_SUKSES_PEMBELI, {
-                    "1": order.nama_pemesan,
-                    "2": partner_reff,
-                    "3": listProduk // Variabel baru untuk pembeli
-                });
-
-                // 2. Kirim Template Sukses ke Admin
-                await sendWhatsAppTemplate(ADMIN_WA, SID_SUKSES_ADMIN, {
-                    "1": order.nama_pemesan,
-                    "2": order.no_hp,
-                    "3": formatIDR(order.total_bayar),
-                    "4": partner_reff,
-                    "5": listProduk,
-                    "6": order.alamat_catatan,
-                    "7": order.sharelock_url || 'tidak disertakan'
-                });
+                // Kirim notifikasi WA (Hanya akan terpanggil satu kali karena status sudah berubah)
+                await Promise.all([
+                    sendWhatsAppTemplate(order.no_hp, SID_SUKSES_PEMBELI, {
+                        "1": order.nama_pemesan,
+                        "2": partner_reff,
+                        "3": listProduk
+                    }),
+                    sendWhatsAppTemplate(ADMIN_WA, SID_SUKSES_ADMIN, {
+                        "1": order.nama_pemesan,
+                        "2": order.no_hp,
+                        "3": formatIDR(order.total_bayar),
+                        "4": partner_reff,
+                        "5": listProduk,
+                        "6": order.alamat_catatan,
+                        "7": order.sharelock_url || 'tidak disertakan'
+                    })
+                ]);
+                console.log(`✅ Notifikasi sukses terkirim untuk ${partner_reff}`);
             }
         }
+
+        // Selalu jawab OK ke LinkQu agar mereka berhenti mengirim retry
         res.json({ message: "OK" });
+
     } catch (err) {
-        console.error("callback error:", err.message);
-        res.status(500).send(err.message);
+        console.error("❌ Callback error:", err.message);
+        // Tetap kirim status 500 jika error teknis database agar LinkQu tahu ada masalah di server
+        res.status(500).send("Internal Server Error");
     }
 });
 
